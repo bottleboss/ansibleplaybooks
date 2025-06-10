@@ -1,0 +1,39 @@
+---
+- name: Update und Upgrade aller Hosts
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Aktualisiere den Paket-Cache (apt update)
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600  # Cache für 1 Stunde gültig halten
+
+    - name: Führe ein Upgrade aller Pakete durch (apt upgrade -y)
+      apt:
+        upgrade: full
+        autoremove: yes
+      notify: Reboot erforderlich
+
+    - name: Entferne unbenutzte Abhängigkeiten (apt autoremove -y)
+      apt:
+        autoremove: yes
+
+    - name: Leere den Paket-Cache (apt autoclean -y)
+      apt:
+        autoclean: yes
+
+    - name: Überprüfe den freien Festplattenspeicher
+      shell: df -h /
+      register: disk_space
+    - name: Ausgabe des Festplattenspeichers
+      debug:
+        var: disk_space.stdout_lines
+
+  handlers:
+    - name: Reboot erforderlich
+      reboot:
+        reboot_timeout: 300
+      when: ansible_reboot_required is defined and ansible_reboot_required
+
