@@ -1,0 +1,5 @@
+- name: Einfacher erfolgreicher Test
+  hosts: localhost
+  tasks:
+    - name: Führe ein einfaches Kommando aus
+      command: echo "Job erfolgreich ausgeführt."
