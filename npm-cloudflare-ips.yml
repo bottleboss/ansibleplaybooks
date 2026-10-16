@@ -1,0 +1,63 @@
+---
+# Aktualisiert die Cloudflare-IP-Ranges im Nginx Proxy Manager, damit hinter
+# Cloudflare die echte Client-IP (CF-Connecting-IP) bei NPM, Nextcloud und
+# fail2ban ankommt. Die Datei wird von allen Proxy-Hosts eingebunden.
+- name: Cloudflare-IPs im Nginx Proxy Manager aktualisieren
+  hosts: 192.168.0.133
+  become: true
+  gather_facts: false
+
+  vars:
+    realip_conf: /data/nginx/custom/server_proxy.conf
+
+  tasks:
+    - name: Cloudflare IPv4-Ranges holen
+      uri:
+        url: https://www.cloudflare.com/ips-v4
+        return_content: true
+      register: cf_v4
+
+    - name: Cloudflare IPv6-Ranges holen
+      uri:
+        url: https://www.cloudflare.com/ips-v6
+        return_content: true
+      register: cf_v6
+
+    - name: Ranges pruefen
+      set_fact:
+        cf_ranges: "{{ (cf_v4.content.split() + cf_v6.content.split()) | select('match', '^[0-9a-f:.]+/[0-9]+$') | list }}"
+      failed_when: cf_ranges | length < 10
+
+    - name: Konfiguration schreiben
+      copy:
+        dest: "{{ realip_conf }}"
+        backup: true
+        mode: "0644"
+        content: |
+          # Echte Client-IP hinter Cloudflare - verwaltet durch Ansible (npm-cloudflare-ips.yml)
+          {% for r in cf_ranges %}
+          set_real_ip_from {{ r }};
+          {% endfor %}
+          real_ip_header CF-Connecting-IP;
+      register: conf
+
+    - name: Testen und neu laden
+      when: conf.changed
+      block:
+        - name: Nginx-Konfiguration testen
+          command: nginx -t
+          changed_when: false
+
+        - name: Nginx neu laden
+          command: nginx -s reload
+      rescue:
+        - name: Alte Konfiguration wiederherstellen
+          copy:
+            src: "{{ conf.backup_file }}"
+            dest: "{{ realip_conf }}"
+            remote_src: true
+          when: conf.backup_file is defined
+
+        - name: Abbrechen
+          fail:
+            msg: "nginx -t fehlgeschlagen, alte Konfiguration wiederhergestellt"

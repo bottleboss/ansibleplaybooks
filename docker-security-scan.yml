@@ -1,0 +1,112 @@
+---
+# Woechentlicher Check der Docker-Container auf dem MediaServer:
+#  1. Gibt es neuere Images in der Registry?
+#  2. Trivy-Scan auf HIGH/CRITICAL CVEs
+# Der Job schlaegt fehl, wenn fuer ein Image mit kritischen CVEs ein Update bereitsteht,
+# damit Semaphore eine Benachrichtigung schickt. Es wird nichts aktualisiert.
+- name: Docker Update- und CVE-Check
+  hosts: 192.168.0.150
+  become: true
+  gather_facts: false
+
+  vars:
+    scan_dir: /root/trivy-scan
+    trivy_image: aquasec/trivy:latest
+
+  tasks:
+    - name: Arbeitsverzeichnis anlegen
+      file:
+        path: "{{ scan_dir }}/out"
+        state: directory
+        mode: "0700"
+
+    - name: Laufende Images ermitteln
+      command: docker ps --format '{{ "{{" }}.Image{{ "}}" }}'
+      register: images_raw
+      changed_when: false
+
+    - name: Image-Liste aufbereiten
+      set_fact:
+        images: "{{ images_raw.stdout_lines | unique | sort }}"
+
+    - name: Auf neuere Images pruefen
+      shell: |
+        ref="{{ item }}"; [[ "$ref" == *:* ]] || ref="$ref:latest"
+        local=$(docker image inspect "$ref" --format '{{ "{{" }}range .RepoDigests{{ "}}" }}{{ "{{" }}.{{ "}}" }} {{ "{{" }}end{{ "}}" }}' | grep -oE 'sha256:[a-f0-9]+' | head -1)
+        remote=$(timeout 60 docker buildx imagetools inspect "$ref" --format '{{ "{{" }}json .Manifest.Digest{{ "}}" }}' 2>/dev/null | tr -d '"')
+        if [ -z "$remote" ]; then echo "unbekannt"; elif [ "$local" = "$remote" ]; then echo "aktuell"; else echo "UPDATE"; fi
+      args:
+        executable: /bin/bash
+      loop: "{{ images }}"
+      register: update_check
+      changed_when: false
+
+    - name: Trivy-Image aktualisieren
+      command: docker pull -q {{ trivy_image }}
+      changed_when: false
+
+    - name: Trivy-Scan (HIGH/CRITICAL)
+      shell: >
+        docker run --rm
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v {{ scan_dir }}/cache:/root/.cache
+        {{ trivy_image }} image --quiet --scanners vuln --severity HIGH,CRITICAL
+        --format json {{ item }}
+      loop: "{{ images }}"
+      register: trivy
+      changed_when: false
+      failed_when: false
+
+    - name: Ergebnisse auswerten
+      set_fact:
+        report: >-
+          {%- set rows = [] -%}
+          {%- for r in trivy.results -%}
+            {%- set vulns = {} -%}
+            {%- if r.rc == 0 and r.stdout -%}
+              {%- for res in (r.stdout | from_json).Results | default([]) -%}
+                {%- for v in res.Vulnerabilities | default([]) -%}
+                  {%- set _ = vulns.update({v.VulnerabilityID: v}) -%}
+                {%- endfor -%}
+              {%- endfor -%}
+            {%- endif -%}
+            {%- set vl = vulns.values() | list -%}
+            {%- set crit = vl | selectattr('Severity', 'eq', 'CRITICAL') | list -%}
+            {%- set _ = rows.append({
+                  'image': r.item,
+                  'upd': update_check.results[loop.index0].stdout,
+                  'scan_ok': r.rc == 0,
+                  'critical': crit | length,
+                  'critical_fixable': crit | selectattr('FixedVersion', 'defined') | rejectattr('FixedVersion', 'eq', '') | list | length,
+                  'high': vl | selectattr('Severity', 'eq', 'HIGH') | list | length,
+                  'critical_ids': crit | map(attribute='VulnerabilityID') | list | sort
+                }) -%}
+          {%- endfor -%}
+          {{ rows | sort(attribute='critical', reverse=true) }}
+
+    - name: Bericht
+      debug:
+        msg: >-
+          {{ '%-45s' | format(item.image) }}
+          update={{ '%-9s' | format(item.upd) }}
+          critical={{ item.critical }} (fixbar {{ item.critical_fixable }})
+          high={{ item.high }}{{ '' if item.scan_ok else '  SCAN FEHLGESCHLAGEN' }}
+      loop: "{{ report }}"
+      loop_control:
+        label: "{{ item.image }}"
+
+    - name: Kritische CVEs im Detail
+      debug:
+        msg: "{{ item.image }}: {{ item.critical_ids | join(', ') }}"
+      loop: "{{ report | selectattr('critical', 'gt', 0) | list }}"
+      loop_control:
+        label: "{{ item.image }}"
+
+    - name: Fehlschlagen wenn Updates fuer Images mit kritischen CVEs bereitstehen (loest Benachrichtigung aus)
+      vars:
+        actionable: "{{ report | selectattr('critical', 'gt', 0) | selectattr('upd', 'eq', 'UPDATE') | map(attribute='image') | list }}"
+      fail:
+        msg: >-
+          Updates fuer Images mit kritischen CVEs verfuegbar: {{ actionable | join(', ') }}.
+          Einspielen: cd /root/services && docker compose pull && docker compose up -d
+      when: actionable | length > 0
