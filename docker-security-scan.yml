@@ -5,7 +5,7 @@
 # Der Job schlaegt fehl, wenn fuer ein Image mit kritischen CVEs ein Update bereitsteht,
 # damit Semaphore eine Benachrichtigung schickt. Es wird nichts aktualisiert.
 - name: Docker Update- und CVE-Check
-  hosts: 192.168.0.150
+  hosts: mediaserver
   become: true
   gather_facts: false
 

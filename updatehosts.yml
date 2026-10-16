@@ -1,6 +1,8 @@
 ---
+# Woechentliches Paket-Update aller Server aus der Gruppe "updates" (siehe inventory.yml).
+# Es wird NICHT automatisch neu gestartet - ob ein Neustart noetig ist, steht im Bericht.
 - name: Update und Upgrade aller Hosts
-  hosts: all
+  hosts: updates
   become: true
   gather_facts: false
 
@@ -10,30 +12,43 @@
         update_cache: yes
         cache_valid_time: 3600  # Cache für 1 Stunde gültig halten
 
-    - name: Führe ein Upgrade aller Pakete durch (apt upgrade -y)
+    - name: Führe ein Upgrade aller Pakete durch (apt full-upgrade)
       apt:
         upgrade: full
-        autoremove: yes
-      notify: Reboot erforderlich
+      register: upgrade
 
-    - name: Entferne unbenutzte Abhängigkeiten (apt autoremove -y)
+    - name: Entferne unbenutzte Abhängigkeiten (apt autoremove)
       apt:
         autoremove: yes
 
-    - name: Leere den Paket-Cache (apt autoclean -y)
+    - name: Leere den Paket-Cache (apt autoclean)
       apt:
         autoclean: yes
 
-    - name: Überprüfe den freien Festplattenspeicher
-      shell: df -h /
+    - name: Prüfe ob ein Neustart nötig ist
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Prüfe den freien Festplattenspeicher
+      command: df -h --output=pcent,avail /
       register: disk_space
-    - name: Ausgabe des Festplattenspeichers
+      changed_when: false
+      check_mode: false
+
+    - name: Bericht
       debug:
-        var: disk_space.stdout_lines
+        msg: >-
+          {{ upgrade.stdout | default('') | regex_findall('(?m)^Setting up (\S+)') | length }} Pakete aktualisiert,
+          Disk belegt/frei: {{ disk_space.stdout_lines[-1] | trim }},
+          {{ 'NEUSTART NÖTIG' if reboot_required.stat.exists else 'kein Neustart nötig' }}
 
-  handlers:
-    - name: Reboot erforderlich
-      reboot:
-        reboot_timeout: 300
-      when: ansible_reboot_required is defined and ansible_reboot_required
+    - name: Aktualisierte Pakete
+      debug:
+        msg: "{{ upgrade.stdout | default('') | regex_findall('(?m)^Setting up (\\S+)') }}"
+      when: upgrade.changed
 
+    - name: Warnung bei fast voller Festplatte (löst Benachrichtigung aus)
+      fail:
+        msg: "Festplatte zu {{ disk_space.stdout_lines[-1].split()[0] }} belegt - bitte aufräumen"
+      when: disk_space.stdout_lines[-1].split()[0] | replace('%', '') | int > 90

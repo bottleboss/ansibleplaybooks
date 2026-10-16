@@ -3,7 +3,7 @@
 # Cloudflare die echte Client-IP (CF-Connecting-IP) bei NPM, Nextcloud und
 # fail2ban ankommt. Die Datei wird von allen Proxy-Hosts eingebunden.
 - name: Cloudflare-IPs im Nginx Proxy Manager aktualisieren
-  hosts: 192.168.0.133
+  hosts: nginxproxymanager
   become: true
   gather_facts: false
 

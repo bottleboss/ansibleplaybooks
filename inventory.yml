@@ -1,0 +1,46 @@
+# Inventar fuer Semaphore (Inventory-Typ "File" -> inventory.yml im Repo)
+# Neue Server: unter "lxc" eintragen, dann laufen sie automatisch im Update-Job mit.
+all:
+  children:
+
+    # Server, die der woechentliche Update-Job (updatehosts.yml) aktualisiert
+    updates:
+      children:
+        lxc:
+        semaphore_host:
+
+    # LXC-Container auf dommox, Zugriff als "ansible" mit sudo
+    lxc:
+      vars:
+        ansible_user: ansible
+      hosts:
+        mediaserver:          # LXC 103 - Docker-Host (/root/services)
+          ansible_host: 192.168.0.150
+        nextcloud:            # LXC 104 - NextcloudPi
+          ansible_host: 192.168.0.50
+        adguard:              # LXC 105
+          ansible_host: 192.168.0.77
+        nginxproxymanager:    # LXC 106
+          ansible_host: 192.168.0.133
+        meinewebsite:         # LXC 107 - Website + cloudflared
+          ansible_host: 192.168.0.99
+        qbittorrent:          # LXC 112
+          ansible_host: 192.168.0.164
+
+    # LXC 102 - hier laeuft Semaphore selbst, daher lokale Verbindung
+    semaphore_host:
+      hosts:
+        ansible:
+          ansible_host: 192.168.0.231
+          ansible_connection: local
+          ansible_python_interpreter: /usr/bin/python3
+
+    # Proxmox-Host: bewusst NICHT im automatischen Update-Job
+    # (Upgrade/Neustart betrifft alle Container und die HAOS-VM).
+    # Semaphore hat hier aktuell keinen SSH-Zugang.
+    proxmox:
+      vars:
+        ansible_user: root
+      hosts:
+        dommox:
+          ansible_host: 192.168.0.123
