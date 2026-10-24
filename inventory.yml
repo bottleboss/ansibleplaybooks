@@ -26,6 +26,8 @@ all:
           ansible_host: 192.168.0.99
         qbittorrent:          # LXC 112
           ansible_host: 192.168.0.164
+        videogen:             # LXC 114 - Video-Generator, Output auf NAS (/mnt/videos)
+          ansible_host: 192.168.0.41
         pbs:                  # LXC 113 - Proxmox Backup Server (kein ansible-User, Zugriff als root)
           ansible_host: 192.168.0.40
           ansible_user: root
